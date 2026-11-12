@@ -1056,9 +1056,14 @@ async function reduzir(file,max=1500){ const img=await createImageBitmap(file); 
 function blobB64(b){ return new Promise(r=>{ const f=new FileReader(); f.onload=()=>r(String(f.result).split(',')[1]); f.readAsDataURL(b); }); }
 // Chama o Gemini: chave no cabeçalho (funciona com chaves AQ. e AIza) e tenta modelos alternativos
 let geminiOk=null;
+// modelos que já bateram o limite grátis do dia (o limite é por modelo)
+function esgotadosHoje(){ try{ const o=JSON.parse(sessionStorage.getItem('gemEsg')||'{}'); return o.dia===hoje()?o.m:[]; }catch(e){ return []; } }
+function marcarEsgotado(mo){ const m=[...new Set([...esgotadosHoje(),mo])]; try{ sessionStorage.setItem('gemEsg',JSON.stringify({dia:hoje(),m})); }catch(e){} if(geminiOk===mo) geminiOk=null; }
 async function gemini(modelo,body){
   if(!cfg.geminiKey) throw new Error('Coloque a chave Gemini nas configurações');
-  const modelos=[...new Set([geminiOk,modelo,'gemini-3.5-flash-lite','gemini-3.5-flash','gemini-3.6-flash','gemini-3.8-flash','gemini-3.1-flash-lite','gemini-flash-latest','gemini-flash-lite-latest'].filter(Boolean))];
+  const esg=esgotadosHoje();
+  const modelos=[...new Set([geminiOk,modelo,'gemini-3.5-flash','gemini-3.5-flash-lite','gemini-3.6-flash','gemini-3.8-flash','gemini-3.1-flash-lite','gemini-3.6-flash-lite','gemini-3.8-flash-lite','gemini-flash-latest','gemini-flash-lite-latest'].filter(m=>m&&!esg.includes(m)))];
+  if(!modelos.length) throw new Error('Limite grátis do Google atingido em todos os modelos hoje. Volta amanhã cedo (zera de madrugada).');
   let ultimo='', erros=[];
   for(const mo of modelos){
     for(const modoChave of ['header','query']){
@@ -1072,9 +1077,10 @@ async function gemini(modelo,body){
       if(r.ok && d.candidates && d.candidates[0]){ geminiOk=mo; return d; }
       ultimo=`${mo} (${r.status}): ${(d.error&&d.error.message)||'sem resposta'}`; erros.push(ultimo.slice(0,140));
       if(r.status===404) break;        // modelo não existe → próximo modelo
-      if(r.status===429) throw new Error('Limite grátis do Google atingido por agora. Tente daqui a pouco. '+ultimo);
+      if(r.status===429){ marcarEsgotado(mo); break; } // limite desse modelo → tenta o próximo
     }
   }
+  if(erros.length && erros.every(e=>/\(429\)/.test(e))) throw new Error('Limite grátis do Google atingido em todos os modelos hoje. Volta amanhã cedo (zera de madrugada).');
   throw new Error(erros.length>1?erros.join(' | '):ultimo);
 }
 async function ocr(blob){
