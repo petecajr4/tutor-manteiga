@@ -305,12 +305,14 @@ const CFG_PAD = {
   nome:'Joséfina', apelido:'espertinha', criador:'Bruno', mae:'Carla Berceli', pin:'1234', nivel:'pesada', frases:'',
   scriptUrl:'', segredo:'', modelo:'gpt-realtime-2.1-mini', voz:'coral',
   orcamento:60, cotacao:5.5, forcarEco:false,
-  geminiKey:'', geminiModelo:'gemini-flash-lite-latest', geminiOcr:'gemini-flash-latest',
+  geminiKey:'', geminiModelo:'gemini-3.5-flash-lite', geminiOcr:'gemini-3.5-flash',
   vozPitch:1.9, vozRate:1.15,
   precos:{ai:10, aic:0.30, ao:20, ti:0.60, tic:0.06, to:2.40}
 };
 let cfg = structuredClone(CFG_PAD);
-async function carregarCfg(){ const c=await DB.get('kv','cfg'); if(c) cfg={...CFG_PAD,...c,precos:{...CFG_PAD.precos,...(c.precos||{})}}; if(cfg.nome==='Manteiga'||cfg.nome==='Josefina') cfg.nome='Joséfina'; }
+async function carregarCfg(){ const c=await DB.get('kv','cfg'); if(c) cfg={...CFG_PAD,...c,precos:{...CFG_PAD.precos,...(c.precos||{})}}; if(cfg.nome==='Manteiga'||cfg.nome==='Josefina') cfg.nome='Joséfina';
+  if(['gemini-flash-lite-latest','gemini-2.5-flash-lite',''].includes(cfg.geminiModelo)) cfg.geminiModelo='gemini-3.5-flash-lite';
+  if(['gemini-flash-latest','gemini-2.5-flash',''].includes(cfg.geminiOcr)) cfg.geminiOcr='gemini-3.5-flash'; }
 async function salvarCfg(){ await DB.put('kv',cfg,'cfg'); }
 
 /* =================== CUSTOS =================== */
@@ -1056,8 +1058,8 @@ function blobB64(b){ return new Promise(r=>{ const f=new FileReader(); f.onload=
 let geminiOk=null;
 async function gemini(modelo,body){
   if(!cfg.geminiKey) throw new Error('Coloque a chave Gemini nas configurações');
-  const modelos=[...new Set([geminiOk,modelo,'gemini-flash-latest','gemini-2.5-flash','gemini-flash-lite-latest','gemini-2.5-flash-lite'].filter(Boolean))];
-  let ultimo='';
+  const modelos=[...new Set([geminiOk,modelo,'gemini-3.5-flash-lite','gemini-3.5-flash','gemini-3.6-flash','gemini-3.8-flash','gemini-3.1-flash-lite','gemini-flash-latest','gemini-flash-lite-latest'].filter(Boolean))];
+  let ultimo='', erros=[];
   for(const mo of modelos){
     for(const modoChave of ['header','query']){
       const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mo)}:generateContent`+(modoChave==='query'?'?key='+encodeURIComponent(cfg.geminiKey):'');
@@ -1065,15 +1067,15 @@ async function gemini(modelo,body){
       if(window.geminiLog) geminiLog(`Tentando ${mo} (chave no ${modoChave==='header'?'cabeçalho':'endereço'})…`);
       let r,d; const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),20000);
       try{ r=await fetch(url,{method:'POST',headers,body:JSON.stringify(body),signal:ctl.signal}); d=await r.json(); }
-      catch(e){ clearTimeout(tm); ultimo=`${mo}: ${e.name==='AbortError'?'sem resposta em 20s':'erro de rede ('+e.message+')'}`; continue; }
+      catch(e){ clearTimeout(tm); ultimo=`${mo}: ${e.name==='AbortError'?'sem resposta em 20s':'erro de rede ('+e.message+')'}`; erros.push(ultimo); continue; }
       clearTimeout(tm);
       if(r.ok && d.candidates && d.candidates[0]){ geminiOk=mo; return d; }
-      ultimo=`${mo} (${r.status}): ${(d.error&&d.error.message)||'sem resposta'}`;
+      ultimo=`${mo} (${r.status}): ${(d.error&&d.error.message)||'sem resposta'}`; erros.push(ultimo.slice(0,140));
       if(r.status===404) break;        // modelo não existe → próximo modelo
       if(r.status===429) throw new Error('Limite grátis do Google atingido por agora. Tente daqui a pouco. '+ultimo);
     }
   }
-  throw new Error(ultimo);
+  throw new Error(erros.length>1?erros.join(' | '):ultimo);
 }
 async function ocr(blob){
   const body={contents:[{role:'user',parts:[{inline_data:{mime_type:'image/jpeg',data:await blobB64(blob)}},{text:'Transcreva fielmente TODO o texto desta página de apostila escolar do 4º ano, na ordem de leitura. Separe parágrafos com uma linha em branco. Inclua títulos, boxes, legendas e exercícios. Descreva entre colchetes, em uma frase, imagens, mapas ou tabelas importantes. Não invente nada e não comente.'}]}]};
