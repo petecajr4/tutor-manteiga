@@ -986,7 +986,7 @@ function preencherCfg(){
   Object.keys(cfg.precos).forEach(k=>$('#p_'+k).value=cfg.precos[k]);
 }
 function lerCfg(){
-  ['apelido','nome','criador','mae','pin','nivel','frases','scriptUrl','segredo','modelo','voz','geminiKey','geminiModelo','geminiOcr'].forEach(k=>cfg[k]=$('#c_'+k).value.trim());
+  ['apelido','nome','criador','mae','pin','nivel','frases','scriptUrl','segredo','modelo','voz','geminiKey','geminiModelo','geminiOcr'].forEach(k=>cfg[k]=$('#c_'+k).value.trim()); cfg.geminiKey=cfg.geminiKey.replace(/\s+/g,''); if(cfg.geminiKey && !/^(AQ\.|AIza)/.test(cfg.geminiKey)) toast('⚠️ A chave Gemini deveria começar com AQ. ou AIza — confira se colou inteira');
   ['orcamento','cotacao','vozPitch','vozRate'].forEach(k=>cfg[k]=parseFloat($('#c_'+k).value)||CFG_PAD[k]);
   cfg.forcarEco=$('#c_forcarEco').checked;
   Object.keys(cfg.precos).forEach(k=>cfg.precos[k]=parseFloat($('#p_'+k).value)||0);
@@ -1062,7 +1062,11 @@ async function gemini(modelo,body){
     for(const modoChave of ['header','query']){
       const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mo)}:generateContent`+(modoChave==='query'?'?key='+encodeURIComponent(cfg.geminiKey):'');
       const headers={'Content-Type':'application/json'}; if(modoChave==='header') headers['x-goog-api-key']=cfg.geminiKey;
-      let r,d; try{ r=await fetch(url,{method:'POST',headers,body:JSON.stringify(body)}); d=await r.json(); }catch(e){ ultimo='rede: '+e.message; continue; }
+      if(window.geminiLog) geminiLog(`Tentando ${mo} (chave no ${modoChave==='header'?'cabeçalho':'endereço'})…`);
+      let r,d; const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),20000);
+      try{ r=await fetch(url,{method:'POST',headers,body:JSON.stringify(body),signal:ctl.signal}); d=await r.json(); }
+      catch(e){ clearTimeout(tm); ultimo=`${mo}: ${e.name==='AbortError'?'sem resposta em 20s':'erro de rede ('+e.message+')'}`; continue; }
+      clearTimeout(tm);
       if(r.ok && d.candidates && d.candidates[0]){ geminiOk=mo; return d; }
       ultimo=`${mo} (${r.status}): ${(d.error&&d.error.message)||'sem resposta'}`;
       if(r.status===404) break;        // modelo não existe → próximo modelo
@@ -1138,9 +1142,9 @@ $('#addMateria').onclick=async()=>{ const n=$('#novaMateria').value.trim(); if(!
   $('#novaMateria').value=''; await renderMaterias(); $('#selMateria').value=n; renderMaterias(); renderHome(); };
 $('#selMateria').onchange=()=>renderMaterias();
 $('#salvarPaginas').onclick=salvarPaginas;
-$('#testarGemini').onclick=async()=>{ lerCfg(); await salvarCfg(); $('#ocrErro').textContent=''; $('#ocrStatus').textContent='Testando Gemini…';
+$('#testarGemini').onclick=async()=>{ lerCfg(); await salvarCfg(); $('#ocrErro').textContent=''; $('#ocrStatus').textContent='Testando Gemini…'; window.geminiLog=t=>$('#ocrStatus').textContent=t;
   try{ const d=await gemini(cfg.geminiOcr,{contents:[{role:'user',parts:[{text:'Responda só: ok'}]}]}); $('#ocrStatus').textContent='✅ Gemini funcionando (modelo '+geminiOk+').'; }
-  catch(e){ $('#ocrStatus').textContent='❌ Gemini falhou:'; $('#ocrErro').textContent=e.message; } };
+  catch(e){ $('#ocrStatus').textContent='❌ Gemini falhou:'; $('#ocrErro').textContent=e.message; } finally { window.geminiLog=null; } };
 $('#apagarMateria').onclick=async()=>{ const m=$('#selMateria').value; if(!m||!confirm('Apagar "'+m+'" e todas as páginas?')) return;
   for(const p of await paginasDe(m)) await DB.del('paginas',p.id); await DB.put('kv',(await materias()).filter(x=>x!==m),'materias'); await DB.del('kv','prog:'+m); renderPai(); renderHome(); };
 $('#salvarCfg').onclick=async()=>{ lerCfg(); await salvarCfg(); toast('Configurações salvas'); renderPai(); renderHome(); };
