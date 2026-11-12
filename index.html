@@ -37,9 +37,11 @@ details>summary{list-style:none;padding:16px;font-weight:800;font-size:18px;curs
 details>summary::-webkit-details-marker{display:none}
 details>div{padding:0 16px 16px}
 .avatar{position:relative;width:max-content;margin:0 auto;touch-action:none;cursor:pointer;user-select:none;-webkit-user-select:none}
-.avatar .corpo{mix-blend-mode:multiply;transform-origin:50% 100%;animation:respira 3.2s ease-in-out infinite;transition:transform .45s cubic-bezier(.25,1.9,.45,1)}
+.avatar .corpo{mix-blend-mode:multiply;transform-origin:50% 100%;animation:balanca 5.5s ease-in-out infinite;transition:transform .45s cubic-bezier(.25,1.9,.45,1)}
 .avatar img{display:block;width:auto;pointer-events:none;-webkit-user-drag:none}
-@keyframes respira{50%{transform:scale(1.012,.99)}}
+@keyframes respira{50%{transform:scale(1.018,.985)}}
+@keyframes balanca{0%,100%{transform:rotate(-1.8deg)}25%{transform:rotate(0deg) translateY(-3px)}50%{transform:rotate(1.8deg)}75%{transform:rotate(0deg) translateY(-2px)}}
+.avatar img{animation:respira 2.8s ease-in-out infinite;transform-origin:50% 100%}
 .avatar.fala .corpo{animation:fala .26s ease-in-out infinite alternate}
 @keyframes fala{to{transform:translateY(-3px) rotate(.7deg)}}
 .avatar.sq .corpo{transform:scale(1.07,.92);transition:transform .07s;animation:none}
@@ -406,7 +408,7 @@ function criarAvatar(sel,altura){
   const el=$(sel);
   el.innerHTML=`<div class="avatar"><div class="corpo"><img draggable="false" alt="Josefina" style="height:${altura}"></div><div class="fx"></div></div>`;
   const box=el.querySelector('.avatar'), img=box.querySelector('img'), fx=box.querySelector('.fx');
-  const A={el,box,pose:null,ate:0,piscaAte:0,prox:Date.now()+2500,proxIdle:Date.now()+9000,falando:false,boca:0,aoTocar:null,
+  const A={el,box,pose:null,ate:0,piscaAte:0,prox:Date.now()+2500,proxIdle:Date.now()+3000,proxFala:0,home:false,falando:false,boca:0,aoTocar:null,
     mostrar(id){ const s=Avatar.src(id); const alvo=s||Avatar.src('neutra'); if(img.getAttribute('src')!==alvo) img.src=alvo; return !!s; },
     gesto(id,ms=2400){ const g=GESTOS[id]; if(!g) return; this.pose=id; this.ate=Date.now()+ms;
       const tem=!!Avatar.src(g.pose); this.render();
@@ -415,12 +417,19 @@ function criarAvatar(sel,altura){
       if(!tem || g.html) this.prop(g.html||g.emoji,ms,!!g.html); },
     prop(c,ms,html){ if(!c) return; const d=document.createElement('div'); d.className='prop'; if(html) d.innerHTML=c; else d.textContent=c; fx.appendChild(d); setTimeout(()=>d.remove(),ms); },
     bolha(t,ms=2200){ fx.querySelectorAll('.bolha').forEach(b=>b.remove()); const d=document.createElement('div'); d.className='bolha'; d.textContent=t; fx.appendChild(d); setTimeout(()=>d.remove(),ms); },
-    setFalando(b){ this.falando=b; box.classList.toggle('fala',b); },
+    setFalando(b){ this.falando=b; box.classList.toggle('fala',b); if(b) this.proxFala=Date.now()+2500; },
+    idle(){ // sorteia uma "mexida" quando ela está parada
+      const op=[['sorriso',30,1600],['careta',14,1400],['piscadinha',10,1300],['acenar',12,1800],['comemorar',this.home?6:0,1600],['naoMeToque',5,1200],['inclina',13,0],['pula',10,0]];
+      let r=Math.random()*op.reduce((s,o)=>s+o[1],0);
+      for(const [id,p,ms] of op){ if((r-=p)<0){ if(ms) this.gesto(id,ms); else { box.classList.remove(id); void box.offsetWidth; box.classList.add(id); setTimeout(()=>box.classList.remove(id),1100); } return; } } },
     render(){ const t=Date.now();
       if(t<this.ate){ this.mostrar(GESTOS[this.pose].pose); return; }
       if(!this.falando){
-        if(t>this.prox){ this.piscaAte=t+140; if(Math.random()<0.2) setTimeout(()=>{ this.piscaAte=Date.now()+120; },260); this.prox=t+2500+Math.random()*3000; }
-        if(t>this.proxIdle){ this.proxIdle=t+9000+Math.random()*9000; const r=Math.random(); if(r<0.45) this.gesto('sorriso',1600); else if(r<0.6) this.gesto('careta',1300); }
+        if(t>this.prox){ this.piscaAte=t+170; if(Math.random()<0.25) setTimeout(()=>{ this.piscaAte=Date.now()+150; },330); this.prox=t+2000+Math.random()*2500; }
+        if(t>this.proxIdle){ this.proxIdle=t+4500+Math.random()*3500; this.idle(); }
+      } else if(t>this.proxFala){ // falando: pequenas expressões no meio da fala
+        this.proxFala=t+3500+Math.random()*2500; if(Math.random()<0.55){ this.gesto(Math.random()<0.7?'sorriso':'careta',650); }
+        else { box.classList.remove('inclina'); void box.offsetWidth; box.classList.add('inclina'); setTimeout(()=>box.classList.remove('inclina'),1000); }
       }
       if(t<this.piscaAte){ this.mostrar('piscando'); return; }
       if(this.falando && this.boca>0.16 && Avatar.src('falando')){ this.mostrar('falando'); return; }
@@ -440,13 +449,13 @@ const Boca = {
   analyser:null, buf:null, falando:false, raf:0,
   ligarStream(stream){ try{ const c=actx(); const src=c.createMediaStreamSource(stream); this.analyser=c.createAnalyser(); this.analyser.fftSize=512; src.connect(this.analyser); this.buf=new Uint8Array(this.analyser.fftSize); }catch(e){ this.analyser=null; } this.loop(); },
   loop(){ cancelAnimationFrame(this.raf); const tick=()=>{ let k=0;
-      if(this.analyser){ this.analyser.getByteTimeDomainData(this.buf); let s=0; for(const v of this.buf){ const x=(v-128)/128; s+=x*x; } k=Math.min(1,Math.sqrt(s/this.buf.length)*6); }
-      else if(this.falando){ k=0.5+0.5*Math.sin(Date.now()/85); }
+      if(this.analyser){ this.analyser.getByteTimeDomainData(this.buf); let s=0; for(const v of this.buf){ const x=(v-128)/128; s+=x*x; } k=Math.min(1,Math.sqrt(s/this.buf.length)*6); if(k>0.05) this.vivo=true; }
+      if(this.falando && !this.vivo){ k=0.5+0.5*Math.sin(Date.now()/85); } // reserva: abre e fecha a boca no ritmo
       if(!this.falando && k<0.05) k=0;
       if(AV) AV.boca=k;
       this.raf=requestAnimationFrame(tick); }; tick(); },
   setFalando(b){ this.falando=b; if(AV) AV.setFalando(b); },
-  parar(){ cancelAnimationFrame(this.raf); this.analyser=null; this.setFalando(false); if(AV) AV.boca=0; }
+  parar(){ cancelAnimationFrame(this.raf); this.analyser=null; this.vivo=false; this.setFalando(false); if(AV) AV.boca=0; }
 };
 
 /* =================== VOZ GRÁTIS (Android) =================== */
@@ -1180,7 +1189,8 @@ $('#importar').onchange=e=>{ if(e.target.files[0]) importar(e.target.files[0]); 
 /* =================== START =================== */
 (async()=>{
   await DB.open(); await carregarCfg();
-  await Avatar.carregar(); criarAvatar('#homeManteiga','46vh');
+  await Avatar.carregar(); const ah=criarAvatar('#homeManteiga','46vh'); ah.home=true;
+  setTimeout(()=>{ ah.gesto('acenar',2200); ah.bolha('Oi, '+(cfg.apelido||'espertinha')+'!'); },700);
   renderHome();
   if(navigator.storage && navigator.storage.persist) navigator.storage.persist();
 })();
