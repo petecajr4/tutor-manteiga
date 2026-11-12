@@ -131,6 +131,8 @@ img.pagina{width:100%;border-radius:14px;border:2px solid #F5E6C4}
   <div class="topo"><h1>Painel do pai</h1><button class="sec peq" id="btnVoltarHome">← Voltar</button></div>
 
   <div class="card" id="cardResumo"></div>
+  <div class="card"><div class="linha"><div><b>☁️ Nuvem (PC ↔ celular)</b><br><span class="muted" id="nuvemStatus">Sincroniza sozinho ao abrir e ao salvar.</span></div>
+    <button class="peq" id="btnSync" style="flex:0 0 auto">Sincronizar agora</button></div></div>
 
   <details open>
     <summary>📚 Matérias e páginas</summary>
@@ -316,7 +318,7 @@ let cfg = structuredClone(CFG_PAD);
 async function carregarCfg(){ const c=await DB.get('kv','cfg'); if(c) cfg={...CFG_PAD,...c,precos:{...CFG_PAD.precos,...(c.precos||{})}}; if(cfg.nome==='Manteiga'||cfg.nome==='Josefina') cfg.nome='Joséfina';
   if(['gemini-flash-lite-latest','gemini-2.5-flash-lite',''].includes(cfg.geminiModelo)) cfg.geminiModelo='gemini-3.5-flash-lite';
   if(['gemini-flash-latest','gemini-2.5-flash',''].includes(cfg.geminiOcr)) cfg.geminiOcr='gemini-3.5-flash'; }
-async function salvarCfg(){ await DB.put('kv',cfg,'cfg'); }
+async function salvarCfg(){ await DB.put('kv',cfg,'cfg'); await DB.put('kv',Date.now(),'cfgAtu'); }
 
 /* =================== CUSTOS =================== */
 const Custos = {
@@ -957,7 +959,7 @@ const Aula = {
   async continuar(){ actx(); await this.ligar('retomada'); },
   async sair(){ this.rodando=false; this.desligarMotor(); ov('#ovPergunta',false); ov('#ovAperto',false);
     if(this.p) await this.salvar(); await this.salvarSessao(); this.sessao=null;
-    try{ this.wl&&this.wl.release(); }catch(e){} tela('home'); renderHome(); }
+    try{ this.wl&&this.wl.release(); }catch(e){} tela('home'); renderHome(); Nuvem.depois(); }
 };
 // desliga sozinho no silêncio (premium) — 25s sem ninguém falar
 setInterval(()=>{ if(Aula.rodando && Aula.modo==='premium' && !Aula.bloqueado && AV && Aula.esperaDesde && !Aula.bateu && Date.now()-Aula.esperaDesde>9000){ Aula.bateu=true; AV.gesto('bater',2000); } },1000);
@@ -1028,10 +1030,10 @@ async function renderMaterias(){
   $('#listaPaginas').innerHTML=pags.map(p=>`<li><details style="border:0;margin:0"><summary style="padding:4px 0;font-size:16px">${esc(fmtPag(p))} ${comErro(p)?'<span class="chip verm">não lida</span>':`<span class="muted">· ${(p.texto||'').length} caracteres</span>`}</summary>
     ${p.erro?`<p style="color:var(--vermelho);font-size:13px">${esc(p.erro)}</p>`:''}
     <textarea data-id="${p.id}">${esc(p.texto)}</textarea><div class="linha" style="margin-top:8px"><button class="peq" data-salva="${p.id}">Salvar texto</button>${p.img?`<button class="sec peq" data-rele="${p.id}">🔁 Reler</button>`:''}<button class="perigo peq" data-apaga="${p.id}">Apagar</button></div></details></li>`).join('') || '<li class="muted">Nenhuma página ainda.</li>';
-  $('#listaPaginas').querySelectorAll('[data-salva]').forEach(b=>b.onclick=async()=>{ const id=+b.dataset.salva; const p=pags.find(x=>x.id===id); p.texto=$(`textarea[data-id="${id}"]`).value; await DB.put('paginas',p); toast('Texto salvo'); });
+  $('#listaPaginas').querySelectorAll('[data-salva]').forEach(b=>b.onclick=async()=>{ const id=+b.dataset.salva; const p=pags.find(x=>x.id===id); p.texto=$(`textarea[data-id="${id}"]`).value; p.atu=Date.now(); await DB.put('paginas',p); toast('Texto salvo'); Nuvem.depois(); });
   $('#listaPaginas').querySelectorAll('[data-rele]').forEach(b=>b.onclick=()=>relerPaginas(pags.filter(x=>x.id===+b.dataset.rele)));
   $('#relerErros').onclick=()=>relerPaginas(pags.filter(comErro));
-  $('#listaPaginas').querySelectorAll('[data-apaga]').forEach(b=>b.onclick=async()=>{ if(!confirm('Apagar esta página?')) return; await DB.del('paginas',+b.dataset.apaga); renderMaterias(); });
+  $('#listaPaginas').querySelectorAll('[data-apaga]').forEach(b=>b.onclick=async()=>{ if(!confirm('Apagar esta página?')) return; const pa=pags.find(x=>x.id===+b.dataset.apaga); if(pa) await apagado('p',pa.materia+'|'+pa.pagina); await DB.del('paginas',+b.dataset.apaga); Nuvem.depois(); renderMaterias(); });
 }
 async function renderPoses(){
   $('#listaPoses').innerHTML=POSES.map(p=>{ const s=Avatar.src(p.id);
@@ -1042,7 +1044,7 @@ async function renderPoses(){
   $('#listaPoses').querySelectorAll('[data-copia]').forEach(b=>b.onclick=async()=>{ const p=POSES.find(x=>x.id===b.dataset.copia);
     const t=PROMPT_BASE+p.p; try{ await navigator.clipboard.writeText(t); toast('Prompt copiado! Cole no ChatGPT com a imagem base.'); }catch(e){ prompt('Copie o prompt:',t); } });
   $('#listaPoses').querySelectorAll('[data-pose]').forEach(inp=>inp.onchange=async()=>{ const fl=inp.files[0]; if(!fl) return;
-    const blob=await reduzir(fl,900); await DB.put('kv',blob,'pose:'+inp.dataset.pose); await Avatar.carregar(); toast('Pose salva!'); renderPoses(); });
+    const blob=await reduzir(fl,900); await DB.put('kv',blob,'pose:'+inp.dataset.pose); await DB.put('kv',Date.now(),'poseAtu:'+inp.dataset.pose); await Avatar.carregar(); Nuvem.depois(); toast('Pose salva!'); renderPoses(); });
   $('#listaPoses').querySelectorAll('[data-tira]').forEach(b=>b.onclick=async()=>{ await DB.del('kv','pose:'+b.dataset.tira); await Avatar.carregar(); renderPoses(); });
 }
 async function renderProgresso(){
@@ -1115,9 +1117,9 @@ async function relerPaginas(lista){
   $('#ocrErro').textContent=''; let ok=0;
   for(let i=0;i<lista.length;i++){ const p=lista[i];
     $('#ocrStatus').textContent=`Relendo ${fmtPag(p)} (${i+1} de ${lista.length})…`; $('#barraOcr').style.width=(i/lista.length*100)+'%';
-    try{ p.texto=await ocr(p.img); p.erro=''; ok++; }catch(e){ p.erro=e.message; $('#ocrErro').textContent='⚠️ '+e.message; await DB.put('paginas',p); if(/Limite|401|403|API key|chave/i.test(e.message)) break; continue; }
+    try{ p.texto=await ocr(p.img); p.erro=''; p.atu=Date.now(); ok++; }catch(e){ p.erro=e.message; $('#ocrErro').textContent='⚠️ '+e.message; await DB.put('paginas',p); if(/Limite|401|403|API key|chave/i.test(e.message)) break; continue; }
     await DB.put('paginas',p); }
-  $('#barraOcr').style.width='100%'; $('#ocrStatus').textContent=`${ok} de ${lista.length} páginas lidas.`; renderMaterias();
+  $('#barraOcr').style.width='100%'; $('#ocrStatus').textContent=`${ok} de ${lista.length} páginas lidas.`; renderMaterias(); Nuvem.depois();
 }
 async function salvarPaginas(){
   const m=$('#selMateria').value; if(!m){ toast('Crie uma matéria primeiro'); return; }
@@ -1125,16 +1127,16 @@ async function salvarPaginas(){
   if(!fotos.length && !manual){ toast('Escolha fotos ou cole um texto'); return; }
   const btn=$('#salvarPaginas'); btn.disabled=true;
   try{
-    if(manual){ await DB.put('paginas',{materia:m,pagina:num,texto:manual,img:null}); num++; $('#textoManual').value=''; }
+    if(manual){ await DB.put('paginas',{materia:m,pagina:num,texto:manual,img:null,atu:Date.now()}); num++; $('#textoManual').value=''; }
     for(let i=0;i<fotos.length;i++){
       $('#ocrStatus').textContent=`Lendo foto ${i+1} de ${fotos.length}…`; $('#barraOcr').style.width=(i/fotos.length*100)+'%';
       const blob=await reduzir(fotos[i]); let texto='';
       let erro=''; try{ texto=await ocr(blob); }catch(e){ erro=e.message; texto=ERRO_OCR; $('#ocrErro').textContent='⚠️ '+erro; }
-      await DB.put('paginas',{materia:m,pagina:num,texto,img:blob,erro}); num++;
+      await DB.put('paginas',{materia:m,pagina:num,texto,img:blob,erro,atu:Date.now()}); num++;
     }
     $('#barraOcr').style.width='100%'; $('#ocrStatus').textContent='Pronto! Revise o texto das páginas abaixo se quiser.'; $('#fotos').value='';
   } finally { btn.disabled=false; }
-  renderMaterias(); renderHome();
+  renderMaterias(); renderHome(); Nuvem.depois();
 }
 
 /* --- backup --- */
@@ -1165,20 +1167,22 @@ $('#btnFalar').onclick=()=>{ actx(); ECO.falarAgora(); };
 $('#btnPagina').onclick=async()=>{ const pg=Aula.paginaAtual(); if(!pg) return; $('#pgTitulo').textContent=fmtPag(pg);
   $('#pgConteudo').innerHTML=pg.img?`<img class="pagina" src="${URL.createObjectURL(pg.img)}">`:`<p style="white-space:pre-wrap">${esc(pg.texto)}</p>`; ov('#ovPagina',true); };
 $('#pgFechar').onclick=()=>ov('#ovPagina',false);
-$('#addMateria').onclick=async()=>{ const n=$('#novaMateria').value.trim(); if(!n) return; const ms=await materias(); if(!ms.includes(n)){ ms.push(n); await DB.put('kv',ms,'materias'); }
+$('#addMateria').onclick=async()=>{ const n=$('#novaMateria').value.trim(); if(!n) return; { const a=(await DB.get('kv','apagados'))||{m:[],p:[]}; a.m=(a.m||[]).filter(x=>x!==n); await DB.put('kv',a,'apagados'); } const ms=await materias(); if(!ms.includes(n)){ ms.push(n); await DB.put('kv',ms,'materias'); }
   $('#novaMateria').value=''; await renderMaterias(); $('#selMateria').value=n; renderMaterias(); renderHome(); };
 $('#selMateria').onchange=()=>renderMaterias();
 $('#salvarPaginas').onclick=salvarPaginas;
 // Importa {materia, paginas:[{pagina, texto}]} — junta com o que já existe (mesma página = substitui o texto)
 $('#importarPaginas').onchange=async e=>{ const fs=[...e.target.files]; e.target.value=''; let tot=0; const mats=new Set(), avisos=[];
-  for(const fl of fs){ let d; try{ d=JSON.parse(await fl.text()); }catch(x){ toast('Arquivo inválido: '+fl.name); continue; }
-    for(const bloco of (Array.isArray(d)?d:[d])){
+  const todos=[]; for(const fl of fs){ let d; try{ d=JSON.parse(await fl.text()); }catch(x){ toast('Arquivo inválido: '+fl.name); continue; }
+    for(const bl of (Array.isArray(d)?d:[d])) todos.push({fl,bloco:bl}); }
+  todos.sort((x,y)=>String(x.bloco.materia||'').length-String(y.bloco.materia||'').length); // matéria principal antes das "anotações"
+  for(const {fl,bloco} of todos){ {
       let m=String(bloco.materia||$('#selMateria').value||'').trim(); if(!m){ toast('Arquivo sem matéria: '+fl.name); continue; }
       let ms=await materias();
       // "Matéria X – anotações..." entra na matéria X como folhas extras
       const base=(!ms.includes(m) || (await paginasDe(m)).length===0) && ms.filter(x=>x!==m && (m.startsWith(x+' ')||m.startsWith(x+' –')||m.startsWith(x+' -'))).sort((x,y)=>y.length-x.length)[0];
       if(base){ const vazia=(await paginasDe(m)).length===0; if(vazia) ms=ms.filter(x=>x!==m); m=base; }
-      if(!ms.includes(m)) ms.push(m); await DB.put('kv',ms,'materias');
+      if(!ms.includes(m)) ms.push(m); await DB.put('kv',ms,'materias'); { const a=(await DB.get('kv','apagados'))||{m:[],p:[]}; a.m=(a.m||[]).filter(x=>x!==m); a.p=(a.p||[]).filter(x=>!x.startsWith(m+'|')); await DB.put('kv',a,'apagados'); }
       // volume: campo "volume", ou "VOLUME N" no texto do índice, ou no nome do arquivo
       const capa=(bloco.paginas||[]).find(p=>+p.pagina===0);
       const vol=parseInt(bloco.volume)||parseInt(((capa&&capa.texto)||'').match(/volume\s*(\d+)/i)?.[1])||parseInt((fl.name.match(/vol(?:ume)?[\s_-]*(\d+)/i)||[])[1])||0;
@@ -1191,22 +1195,82 @@ $('#importarPaginas').onchange=async e=>{ const fs=[...e.target.files]; e.target
         // limpa importação antiga sem volume (mesmo número e mesmo texto)
         if(vol){ const velho=existentes.find(x=>x.pagina===num && x.pagina<1000 && x.texto===texto); if(velho) await DB.del('paginas',velho.id); }
         const ja=existentes.find(x=>x.pagina===n);
-        if(ja){ ja.texto=texto; ja.erro=''; if(rotulo) ja.rotulo=rotulo; await DB.put('paginas',ja); }
-        else { const nova={materia:m,pagina:n,texto,img:null,erro:''}; if(rotulo) nova.rotulo=rotulo; await DB.put('paginas',nova); existentes.push(nova); }
+        if(ja){ ja.texto=texto; ja.erro=''; ja.atu=Date.now(); if(rotulo) ja.rotulo=rotulo; await DB.put('paginas',ja); }
+        else { const nova={materia:m,pagina:n,texto,img:null,erro:'',atu:Date.now()}; if(rotulo) nova.rotulo=rotulo; await DB.put('paginas',nova); existentes.push(nova); }
         tot++; }
       mats.add(m); if(vol) avisos.push('volume '+vol); } }
-  toast(`✅ ${tot} páginas importadas em ${[...mats].join(', ')||'-'}${avisos.length?' ('+avisos.join(', ')+')':''}`);
+  toast(`✅ ${tot} páginas importadas em ${[...mats].join(', ')||'-'}${avisos.length?' ('+avisos.join(', ')+')':''}`); Nuvem.depois();
   await renderMaterias(); if(mats.size===1){ $('#selMateria').value=[...mats][0]; renderMaterias(); } renderHome(); };
 $('#testarGemini').onclick=async()=>{ lerCfg(); await salvarCfg(); $('#ocrErro').textContent=''; $('#ocrStatus').textContent='Testando Gemini…'; window.geminiLog=t=>$('#ocrStatus').textContent=t;
   try{ const d=await gemini(cfg.geminiOcr,{contents:[{role:'user',parts:[{text:'Responda só: ok'}]}]}); $('#ocrStatus').textContent='✅ Gemini funcionando (modelo '+geminiOk+').'; }
   catch(e){ $('#ocrStatus').textContent='❌ Gemini falhou:'; $('#ocrErro').textContent=e.message; } finally { window.geminiLog=null; } };
 $('#apagarMateria').onclick=async()=>{ const m=$('#selMateria').value; if(!m||!confirm('Apagar "'+m+'" e todas as páginas?')) return;
-  for(const p of await paginasDe(m)) await DB.del('paginas',p.id); await DB.put('kv',(await materias()).filter(x=>x!==m),'materias'); await DB.del('kv','prog:'+m); renderPai(); renderHome(); };
-$('#salvarCfg').onclick=async()=>{ lerCfg(); await salvarCfg(); toast('Configurações salvas'); renderPai(); renderHome(); };
+  await apagado('m',m); for(const p of await paginasDe(m)) await DB.del('paginas',p.id); Nuvem.depois(); await DB.put('kv',(await materias()).filter(x=>x!==m),'materias'); await DB.del('kv','prog:'+m); renderPai(); renderHome(); };
+$('#salvarCfg').onclick=async()=>{ lerCfg(); await salvarCfg(); toast('Configurações salvas'); renderPai(); renderHome(); Nuvem.sincronizar(true); };
 $('#testarVozEco').onclick=()=>{ lerCfg(); falarEco('Oi, eu sou a Prof. Joséfina! Não me toque! Para, faz cosquinha! Nossa, hoje você se superou: uma abobrinha atrás da outra!'); };
 $('#testarConexao').onclick=async()=>{ lerCfg(); try{ const u=cfg.scriptUrl+'?s='+encodeURIComponent(cfg.segredo)+'&voice='+cfg.voz+'&model='+encodeURIComponent(cfg.modelo); const k=await (await fetch(u)).json(); toast(k.value?'✅ Premium OK! Chave temporária gerada.':'❌ '+(k.erro||'falhou')); }catch(e){ toast('❌ '+e.message); } };
 $('#exportar').onclick=exportar;
+$('#btnSync').onclick=()=>Nuvem.sincronizar(false);
 $('#importar').onchange=e=>{ if(e.target.files[0]) importar(e.target.files[0]); e.target.value=''; };
+
+/* =================== NUVEM (sincroniza PC ↔ celular pelo Google Drive) =================== */
+const blobURL=b=>new Promise(r=>{ const f=new FileReader(); f.onload=()=>r(f.result); f.readAsDataURL(b); });
+async function apagado(tipo,chave){ const a=(await DB.get('kv','apagados'))||{m:[],p:[]}; a[tipo]=[...new Set([...(a[tipo]||[]),chave])]; await DB.put('kv',a,'apagados'); }
+const Nuvem={
+  ocupado:false, timer:null,
+  async chamar(acao,dados){
+    if(!cfg.scriptUrl||!cfg.segredo) throw new Error('Preencha a URL do script e a senha nas configurações');
+    const ctl=new AbortController(), tm=setTimeout(()=>ctl.abort(),60000);
+    try{ const r=await fetch(cfg.scriptUrl,{method:'POST',body:JSON.stringify({s:cfg.segredo,acao,dados}),signal:ctl.signal}); const d=await r.json(); if(d.erro) throw new Error(d.erro); return d; }
+    catch(e){ throw new Error(e.name==='AbortError'?'a nuvem não respondeu':(/Unexpected token|JSON/.test(e.message)?'atualize o script do Google (nova versão com nuvem)':e.message)); }
+    finally{ clearTimeout(tm); } },
+  async pacote(){
+    const kv={}; const keys=await DB.req('kv','readonly',s=>s.getAllKeys());
+    for(const k of keys){ if(k==='syncEm') continue; let v=await DB.get('kv',k); if(v instanceof Blob) v={__blob:await blobURL(v)}; kv[k]=v; }
+    return {versao:2,em:Date.now(),kv,
+      paginas:(await DB.all('paginas')).map(p=>{ const c={...p}; delete c.id; c.img=null; return c; }),
+      respostas:await DB.all('respostas'), sessoes:(await DB.all('sessoes')).slice(-30), custos:await DB.all('custos')}; },
+  async aplicar(rem){
+    if(!rem||!rem.kv) return; const R=rem.kv;
+    // apagados (para não "ressuscitar" o que foi apagado em outro aparelho)
+    const la=(await DB.get('kv','apagados'))||{m:[],p:[]}, ra=R.apagados||{m:[],p:[]};
+    const ap={m:[...new Set([...(la.m||[]),...(ra.m||[])])],p:[...new Set([...(la.p||[]),...(ra.p||[])])]}; await DB.put('kv',ap,'apagados');
+    // configurações: a mais recente vence; campos vazios são completados
+    if(R.cfg){ const lAtu=(await DB.get('kv','cfgAtu'))||0, rAtu=R.cfgAtu||0;
+      if(rAtu>lAtu){ const keep={scriptUrl:cfg.scriptUrl,segredo:cfg.segredo}; cfg={...CFG_PAD,...R.cfg,precos:{...CFG_PAD.precos,...(R.cfg.precos||{})}}; if(!cfg.scriptUrl) Object.assign(cfg,keep); await DB.put('kv',cfg,'cfg'); await DB.put('kv',rAtu,'cfgAtu'); }
+      else { let mudou=false; for(const k of Object.keys(R.cfg)){ if(k==='precos') continue; if((cfg[k]===''||cfg[k]===CFG_PAD[k]) && R.cfg[k]!==undefined && R.cfg[k]!=='' && R.cfg[k]!==cfg[k]){ cfg[k]=R.cfg[k]; mudou=true; } } if(mudou) await DB.put('kv',cfg,'cfg'); } }
+    // matérias, dias de estudo, tiradas usadas
+    const lm=await materias(); const um=[...new Set([...lm,...(R.materias||[])])].filter(m=>!ap.m.includes(m)); await DB.put('kv',um,'materias');
+    await DB.put('kv',[...new Set([...((await DB.get('kv','dias'))||[]),...(R.dias||[])])],'dias');
+    await DB.put('kv',[...new Set([...((await DB.get('kv','usadas'))||[]),...(R.usadas||[])])].slice(-50),'usadas');
+    for(const k of Object.keys(R)){
+      if(k.startsWith('prog:')){ const l=await DB.get('kv',k); if(!l || (R[k].xp||0)>(l.xp||0)) await DB.put('kv',R[k],k); }
+      if(k.startsWith('pose:') && R[k] && R[k].__blob){ const id=k.slice(5), lA=(await DB.get('kv','poseAtu:'+id))||0, rA=R['poseAtu:'+id]||0;
+        if(rA>lA || !(await DB.get('kv',k))){ await DB.put('kv',await (await fetch(R[k].__blob)).blob(),k); await DB.put('kv',rA,'poseAtu:'+id); } }
+    }
+    // páginas: a versão mais nova de cada página vence
+    const loc=await DB.all('paginas'); const mapa=new Map(loc.map(p=>[p.materia+'|'+p.pagina,p]));
+    for(const p of loc){ const ch=p.materia+'|'+p.pagina; if(ap.m.includes(p.materia)||ap.p.includes(ch)) await DB.del('paginas',p.id); }
+    for(const p of (rem.paginas||[])){ const ch=p.materia+'|'+p.pagina; if(ap.m.includes(p.materia)||ap.p.includes(ch)) continue; const l=mapa.get(ch);
+      if(!l) await DB.put('paginas',{...p,img:null}); else if((p.atu||0)>(l.atu||0)){ l.texto=p.texto; l.erro=p.erro||''; if(p.rotulo) l.rotulo=p.rotulo; l.atu=p.atu; await DB.put('paginas',l); } }
+    // respostas, conversas e custos
+    const lr=new Set((await DB.all('respostas')).map(r=>r.ts+'|'+r.enunciado));
+    for(const r of (rem.respostas||[])) if(!lr.has(r.ts+'|'+r.enunciado)){ const c={...r}; delete c.id; await DB.put('respostas',c); }
+    const ls=new Set((await DB.all('sessoes')).map(s=>s.ts));
+    for(const s of (rem.sessoes||[])) if(!ls.has(s.ts)){ const c={...s}; delete c.id; await DB.put('sessoes',c); }
+    for(const c of (rem.custos||[])){ const l=await DB.get('custos',c.dia); if(!l||c.usd>l.usd) await DB.put('custos',c); }
+    await carregarCfg(); await Avatar.carregar(); },
+  async sincronizar(silencioso){
+    if(this.ocupado) return; if(!cfg.scriptUrl||!cfg.segredo){ if(!silencioso) toast('☁️ Preencha a URL do script e a senha'); return; }
+    this.ocupado=true; const st=$('#nuvemStatus'); if(st) st.textContent='☁️ Sincronizando…';
+    try{ const d=await this.chamar('baixar'); if(d.dados) await this.aplicar(d.dados);
+      await this.chamar('salvar',await this.pacote()); await DB.put('kv',Date.now(),'syncEm');
+      if(st) st.textContent='☁️ Sincronizado agora ('+new Date().toLocaleTimeString('pt-BR')+')'; if(!silencioso) toast('☁️ Tudo sincronizado!');
+      renderHome(); if($('#pai').classList.contains('on')){ preencherCfg(); renderPai(); } return true; }
+    catch(e){ if(st) st.textContent='☁️ Não sincronizou: '+e.message; if(!silencioso) toast('☁️ '+e.message); }
+    finally{ this.ocupado=false; } },
+  depois(){ clearTimeout(this.timer); this.timer=setTimeout(()=>this.sincronizar(true),2500); }
+};
 
 /* =================== START =================== */
 (async()=>{
@@ -1215,6 +1279,8 @@ $('#importar').onchange=e=>{ if(e.target.files[0]) importar(e.target.files[0]); 
   setTimeout(()=>{ ah.gesto('acenar',2200); ah.bolha('Oi, '+(cfg.apelido||'espertinha')+'!'); },700);
   renderHome();
   if(navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  if(cfg.scriptUrl && cfg.segredo) Nuvem.sincronizar(true);
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden && !Aula.rodando && cfg.scriptUrl) Nuvem.sincronizar(true); });
 })();
 </script>
 </body>
