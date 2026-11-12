@@ -149,6 +149,8 @@ img.pagina{width:100%;border-radius:14px;border:2px solid #F5E6C4}
         <button id="salvarPaginas" style="width:100%;margin-top:10px">Salvar páginas</button>
         <div class="barra" style="margin-top:10px"><i id="barraOcr"></i></div>
         <p class="muted" id="ocrStatus"></p>
+        <p id="ocrErro" style="color:var(--vermelho);font-size:14px;font-weight:700;word-break:break-word"></p>
+        <div class="linha"><button class="sec peq" id="testarGemini">🧪 Testar Gemini</button><button class="sec peq" id="relerErros">🔁 Reler páginas com erro</button></div>
       </div>
       <ul class="lista" id="listaPaginas"></ul>
       <button class="perigo peq" id="apagarMateria" style="margin-top:10px">Apagar matéria inteira</button>
@@ -819,9 +821,7 @@ const ECO = {
     this.hist.push({role:'user',parts:[{text:txt}]}); setStatus('Pensando…'); $('#btnFalar').style.display='none';
     let j;
     try{
-      const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.geminiModelo)}:generateContent?key=${encodeURIComponent(cfg.geminiKey)}`;
-      const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:this.sys}]},contents:this.hist.slice(-30),generationConfig:{responseMimeType:'application/json',temperature:0.9}})});
-      const d=await r.json(); if(!r.ok) throw new Error((d.error&&d.error.message)||r.status);
+      const d=await gemini(cfg.geminiModelo,{systemInstruction:{parts:[{text:this.sys}]},contents:this.hist.slice(-30),generationConfig:{responseMimeType:'application/json',temperature:0.9}});
       const t=(d.candidates[0].content.parts||[]).map(p=>p.text||'').join('');
       this.hist.push({role:'model',parts:[{text:t}]});
       j=JSON.parse(t.replace(/^```json|```$/g,'').trim());
@@ -1004,9 +1004,12 @@ async function renderMaterias(){
   sel.innerHTML=ms.map(m=>`<option ${m===atual?'selected':''}>${esc(m)}</option>`).join('');
   const m=sel.value; const pags=m?await paginasDe(m):[];
   if(pags.length) $('#numPagina').value=pags[pags.length-1].pagina+1;
-  $('#listaPaginas').innerHTML=pags.map(p=>`<li><details style="border:0;margin:0"><summary style="padding:4px 0;font-size:16px">Pág. ${p.pagina} <span class="muted">· ${(p.texto||'').length} caracteres</span></summary>
-    <textarea data-id="${p.id}">${esc(p.texto)}</textarea><div class="linha" style="margin-top:8px"><button class="peq" data-salva="${p.id}">Salvar texto</button><button class="perigo peq" data-apaga="${p.id}">Apagar</button></div></details></li>`).join('') || '<li class="muted">Nenhuma página ainda.</li>';
+  $('#listaPaginas').innerHTML=pags.map(p=>`<li><details style="border:0;margin:0"><summary style="padding:4px 0;font-size:16px">Pág. ${p.pagina} ${comErro(p)?'<span class="chip verm">não lida</span>':`<span class="muted">· ${(p.texto||'').length} caracteres</span>`}</summary>
+    ${p.erro?`<p style="color:var(--vermelho);font-size:13px">${esc(p.erro)}</p>`:''}
+    <textarea data-id="${p.id}">${esc(p.texto)}</textarea><div class="linha" style="margin-top:8px"><button class="peq" data-salva="${p.id}">Salvar texto</button>${p.img?`<button class="sec peq" data-rele="${p.id}">🔁 Reler</button>`:''}<button class="perigo peq" data-apaga="${p.id}">Apagar</button></div></details></li>`).join('') || '<li class="muted">Nenhuma página ainda.</li>';
   $('#listaPaginas').querySelectorAll('[data-salva]').forEach(b=>b.onclick=async()=>{ const id=+b.dataset.salva; const p=pags.find(x=>x.id===id); p.texto=$(`textarea[data-id="${id}"]`).value; await DB.put('paginas',p); toast('Texto salvo'); });
+  $('#listaPaginas').querySelectorAll('[data-rele]').forEach(b=>b.onclick=()=>relerPaginas(pags.filter(x=>x.id===+b.dataset.rele)));
+  $('#relerErros').onclick=()=>relerPaginas(pags.filter(comErro));
   $('#listaPaginas').querySelectorAll('[data-apaga]').forEach(b=>b.onclick=async()=>{ if(!confirm('Apagar esta página?')) return; await DB.del('paginas',+b.dataset.apaga); renderMaterias(); });
 }
 async function renderPoses(){
@@ -1049,13 +1052,41 @@ async function reduzir(file,max=1500){ const img=await createImageBitmap(file); 
   const cv=document.createElement('canvas'); cv.width=Math.round(img.width*s); cv.height=Math.round(img.height*s); const cx=cv.getContext('2d'); cx.fillStyle='#fff'; cx.fillRect(0,0,cv.width,cv.height); cx.drawImage(img,0,0,cv.width,cv.height);
   return new Promise(r=>cv.toBlob(r,'image/jpeg',0.82)); }
 function blobB64(b){ return new Promise(r=>{ const f=new FileReader(); f.onload=()=>r(String(f.result).split(',')[1]); f.readAsDataURL(b); }); }
-async function ocr(blob){
+// Chama o Gemini: chave no cabeçalho (funciona com chaves AQ. e AIza) e tenta modelos alternativos
+let geminiOk=null;
+async function gemini(modelo,body){
   if(!cfg.geminiKey) throw new Error('Coloque a chave Gemini nas configurações');
-  const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.geminiOcr)}:generateContent?key=${encodeURIComponent(cfg.geminiKey)}`;
+  const modelos=[...new Set([geminiOk,modelo,'gemini-flash-latest','gemini-2.5-flash','gemini-flash-lite-latest','gemini-2.5-flash-lite'].filter(Boolean))];
+  let ultimo='';
+  for(const mo of modelos){
+    for(const modoChave of ['header','query']){
+      const url=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(mo)}:generateContent`+(modoChave==='query'?'?key='+encodeURIComponent(cfg.geminiKey):'');
+      const headers={'Content-Type':'application/json'}; if(modoChave==='header') headers['x-goog-api-key']=cfg.geminiKey;
+      let r,d; try{ r=await fetch(url,{method:'POST',headers,body:JSON.stringify(body)}); d=await r.json(); }catch(e){ ultimo='rede: '+e.message; continue; }
+      if(r.ok && d.candidates && d.candidates[0]){ geminiOk=mo; return d; }
+      ultimo=`${mo} (${r.status}): ${(d.error&&d.error.message)||'sem resposta'}`;
+      if(r.status===404) break;        // modelo não existe → próximo modelo
+      if(r.status===429) throw new Error('Limite grátis do Google atingido por agora. Tente daqui a pouco. '+ultimo);
+    }
+  }
+  throw new Error(ultimo);
+}
+async function ocr(blob){
   const body={contents:[{role:'user',parts:[{inline_data:{mime_type:'image/jpeg',data:await blobB64(blob)}},{text:'Transcreva fielmente TODO o texto desta página de apostila escolar do 4º ano, na ordem de leitura. Separe parágrafos com uma linha em branco. Inclua títulos, boxes, legendas e exercícios. Descreva entre colchetes, em uma frase, imagens, mapas ou tabelas importantes. Não invente nada e não comente.'}]}]};
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json();
-  if(!r.ok) throw new Error((d.error&&d.error.message)||r.status);
-  return (d.candidates[0].content.parts||[]).map(p=>p.text||'').join('').trim();
+  const d=await gemini(cfg.geminiOcr,body);
+  const t=((d.candidates[0].content||{}).parts||[]).map(p=>p.text||'').join('').trim();
+  if(!t) throw new Error('O Google não devolveu texto (foto escura ou borrada?)'); return t;
+}
+const ERRO_OCR='(não consegui ler esta foto — toque em Reler ou edite o texto aqui)';
+const comErro=p=>p.img && (p.erro || /^\(não consegui ler esta foto/.test(p.texto||''));
+async function relerPaginas(lista){
+  if(!lista.length){ toast('Nenhuma página com foto para reler'); return; }
+  $('#ocrErro').textContent=''; let ok=0;
+  for(let i=0;i<lista.length;i++){ const p=lista[i];
+    $('#ocrStatus').textContent=`Relendo pág. ${p.pagina} (${i+1} de ${lista.length})…`; $('#barraOcr').style.width=(i/lista.length*100)+'%';
+    try{ p.texto=await ocr(p.img); p.erro=''; ok++; }catch(e){ p.erro=e.message; $('#ocrErro').textContent='⚠️ '+e.message; await DB.put('paginas',p); if(/Limite|401|403|API key|chave/i.test(e.message)) break; continue; }
+    await DB.put('paginas',p); }
+  $('#barraOcr').style.width='100%'; $('#ocrStatus').textContent=`${ok} de ${lista.length} páginas lidas.`; renderMaterias();
 }
 async function salvarPaginas(){
   const m=$('#selMateria').value; if(!m){ toast('Crie uma matéria primeiro'); return; }
@@ -1067,8 +1098,8 @@ async function salvarPaginas(){
     for(let i=0;i<fotos.length;i++){
       $('#ocrStatus').textContent=`Lendo foto ${i+1} de ${fotos.length}…`; $('#barraOcr').style.width=(i/fotos.length*100)+'%';
       const blob=await reduzir(fotos[i]); let texto='';
-      try{ texto=await ocr(blob); }catch(e){ toast('Foto '+(i+1)+': '+e.message); texto='(não consegui ler esta foto — edite o texto aqui)'; }
-      await DB.put('paginas',{materia:m,pagina:num,texto,img:blob}); num++;
+      let erro=''; try{ texto=await ocr(blob); }catch(e){ erro=e.message; texto=ERRO_OCR; $('#ocrErro').textContent='⚠️ '+erro; }
+      await DB.put('paginas',{materia:m,pagina:num,texto,img:blob,erro}); num++;
     }
     $('#barraOcr').style.width='100%'; $('#ocrStatus').textContent='Pronto! Revise o texto das páginas abaixo se quiser.'; $('#fotos').value='';
   } finally { btn.disabled=false; }
@@ -1107,6 +1138,9 @@ $('#addMateria').onclick=async()=>{ const n=$('#novaMateria').value.trim(); if(!
   $('#novaMateria').value=''; await renderMaterias(); $('#selMateria').value=n; renderMaterias(); renderHome(); };
 $('#selMateria').onchange=()=>renderMaterias();
 $('#salvarPaginas').onclick=salvarPaginas;
+$('#testarGemini').onclick=async()=>{ lerCfg(); await salvarCfg(); $('#ocrErro').textContent=''; $('#ocrStatus').textContent='Testando Gemini…';
+  try{ const d=await gemini(cfg.geminiOcr,{contents:[{role:'user',parts:[{text:'Responda só: ok'}]}]}); $('#ocrStatus').textContent='✅ Gemini funcionando (modelo '+geminiOk+').'; }
+  catch(e){ $('#ocrStatus').textContent='❌ Gemini falhou:'; $('#ocrErro').textContent=e.message; } };
 $('#apagarMateria').onclick=async()=>{ const m=$('#selMateria').value; if(!m||!confirm('Apagar "'+m+'" e todas as páginas?')) return;
   for(const p of await paginasDe(m)) await DB.del('paginas',p.id); await DB.put('kv',(await materias()).filter(x=>x!==m),'materias'); await DB.del('kv','prog:'+m); renderPai(); renderHome(); };
 $('#salvarCfg').onclick=async()=>{ lerCfg(); await salvarCfg(); toast('Configurações salvas'); renderPai(); renderHome(); };
