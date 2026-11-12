@@ -150,6 +150,7 @@ img.pagina{width:100%;border-radius:14px;border:2px solid #F5E6C4}
         <div class="barra" style="margin-top:10px"><i id="barraOcr"></i></div>
         <p class="muted" id="ocrStatus"></p>
         <p id="ocrErro" style="color:var(--vermelho);font-size:14px;font-weight:700;word-break:break-word"></p>
+        <label class="sec" style="display:block;margin:10px 0;text-align:center;padding:10px 12px;border-radius:12px;background:#fff;border:2px solid #F0DDB0;cursor:pointer;font-weight:800">📥 Importar páginas (arquivo .json do Claude)<input type="file" id="importarPaginas" accept=".json,application/json" multiple style="display:none"></label>
         <div class="linha"><button class="sec peq" id="testarGemini">🧪 Testar Gemini</button><button class="sec peq" id="relerErros">🔁 Reler páginas com erro</button></div>
       </div>
       <ul class="lista" id="listaPaginas"></ul>
@@ -647,7 +648,10 @@ ${frases}
 COMO DAR A AULA
 - Matéria: ${a.materia}. ${a.revisao?'Revisão das páginas '+a.paginas+', rodada':'Página '+a.pagina+', parte'} ${a.ci+1} de ${a.cn}.
 - ${abertura}${foco}
-- Ensine e pergunte SOMENTE com base no conteúdo abaixo. Explique com exemplos do dia a dia de criança, faça perguntinhas curtas e deixe ela falar.
+- A BASE da aula é o conteúdo da apostila abaixo. Explique com exemplos do dia a dia de criança, faça perguntinhas curtas e deixe ela falar.
+- DÚVIDAS ALÉM DA APOSTILA: se ela perguntar algo que a apostila não explica (um porquê, um detalhe, uma palavra difícil, algo relacionado), RESPONDA com o seu próprio conhecimento, avisando de um jeito divertido ("isso não tá na apostila, mas a professora Joséfina sabe tudo..."). Resposta curta (2-3 frases), adequada para 10 anos, só com o que você tem CERTEZA que é verdade — se não tiver certeza, diga que não sabe e sugira perguntar pra professora da escola. Depois volte pra matéria.
+- Se o seu conhecimento for diferente do que diz a apostila, siga a APOSTILA (é o que a escola cobra) e não confunda ela.
+- PERGUNTAS DE FIXAÇÃO (mostrar_pergunta) e revisão: SEMPRE só sobre o conteúdo da apostila, porque é o que cai na prova.
 - FALAS CURTAS: no máximo 2 ou 3 frases por vez, depois passe a bola pra ela.
 - ${a.revisao?'Na revisão, siga o MODO REVISÃO acima (pergunta atrás de pergunta).':'Durante cada trecho, faça 1 ou 2 perguntas de fixação usando a ferramenta mostrar_pergunta.'} Antes, diga: "Papel e caneta na mão, ${ap}!" e leia a pergunta em voz alta. Ela escreve no caderno e toca na resposta. Depois que vier o resultado, reaja (zoeira se errou, festa se acertou) e explique rapidinho.
 - A cada ~6 minutos, ou se ela errar 2 seguidas ou parecer cansada, diga algo como "Tá estressadinha? Pode me fazer cosquinha!" e use a ferramenta hora_do_aperto.
@@ -1150,6 +1154,18 @@ $('#addMateria').onclick=async()=>{ const n=$('#novaMateria').value.trim(); if(!
   $('#novaMateria').value=''; await renderMaterias(); $('#selMateria').value=n; renderMaterias(); renderHome(); };
 $('#selMateria').onchange=()=>renderMaterias();
 $('#salvarPaginas').onclick=salvarPaginas;
+// Importa {materia, paginas:[{pagina, texto}]} — junta com o que já existe (mesma página = substitui o texto)
+$('#importarPaginas').onchange=async e=>{ const fs=[...e.target.files]; e.target.value=''; let tot=0, mats=new Set();
+  for(const fl of fs){ let d; try{ d=JSON.parse(await fl.text()); }catch(x){ toast('Arquivo inválido: '+fl.name); continue; }
+    const lista=Array.isArray(d)?d:[d];
+    for(const bloco of lista){ const m=String(bloco.materia||$('#selMateria').value||'').trim(); if(!m){ toast('Arquivo sem matéria: '+fl.name); continue; }
+      const ms=await materias(); if(!ms.includes(m)){ ms.push(m); await DB.put('kv',ms,'materias'); }
+      const existentes=await paginasDe(m);
+      for(const pg of (bloco.paginas||[])){ const n=parseInt(pg.pagina); const texto=String(pg.texto||'').trim(); if(!n||!texto) continue;
+        const ja=existentes.find(x=>x.pagina===n);
+        if(ja){ ja.texto=texto; ja.erro=''; await DB.put('paginas',ja); } else await DB.put('paginas',{materia:m,pagina:n,texto,img:null,erro:''});
+        tot++; } mats.add(m); } }
+  toast(`✅ ${tot} páginas importadas em ${[...mats].join(', ')||'-'}`); await renderMaterias(); if(mats.size===1){ $('#selMateria').value=[...mats][0]; renderMaterias(); } renderHome(); };
 $('#testarGemini').onclick=async()=>{ lerCfg(); await salvarCfg(); $('#ocrErro').textContent=''; $('#ocrStatus').textContent='Testando Gemini…'; window.geminiLog=t=>$('#ocrStatus').textContent=t;
   try{ const d=await gemini(cfg.geminiOcr,{contents:[{role:'user',parts:[{text:'Responda só: ok'}]}]}); $('#ocrStatus').textContent='✅ Gemini funcionando (modelo '+geminiOk+').'; }
   catch(e){ $('#ocrStatus').textContent='❌ Gemini falhou:'; $('#ocrErro').textContent=e.message; } finally { window.geminiLog=null; } };
